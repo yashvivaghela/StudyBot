@@ -25,9 +25,10 @@ interface Plan {
 interface Props {
   plan: Plan
   onUpdateTask: (taskId: number, status: string) => void
+  onTaskClick: (description: string) => void
 }
 
-export default function PlanDashboard({ plan, onUpdateTask }: Props) {
+export default function PlanDashboard({ plan, onUpdateTask,onTaskClick}: Props) {
   const [openWeeks, setOpenWeeks] = useState<number[]>([1])
 
   const allTasks = plan.weeks.flatMap(w => w.tasks)
@@ -110,15 +111,19 @@ export default function PlanDashboard({ plan, onUpdateTask }: Props) {
 
                     {/* Text + struggling */}
                     <div className="flex-1 min-w-0">
-                      <p className={`text-xs leading-relaxed ${
-                        task.status === 'done'
-                          ? 'line-through text-zinc-600'
-                          : task.status === 'struggling'
-                          ? 'text-red-300'
-                          : 'text-zinc-300'
-                      }`}>
-                        {task.description}
-                      </p>
+                      
+                      <p
+  onClick={() => onTaskClick(task.description)}
+  className={`text-xs leading-relaxed cursor-pointer hover:text-violet-400 transition-colors ${
+    task.status === 'done'
+      ? 'line-through text-zinc-600'
+      : task.status === 'struggling'
+      ? 'text-red-300'
+      : 'text-zinc-300'
+  }`}
+>
+  {task.description}
+</p>
                       <button
                         onClick={() => onUpdateTask(task.id, task.status === 'struggling' ? 'todo' : 'struggling')}
                         className={`mt-1.5 text-xs px-2 py-0.5 rounded-full border transition-all ${

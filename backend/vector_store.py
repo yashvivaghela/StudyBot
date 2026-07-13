@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import os
 import uuid
 from pathlib import Path
+import time
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
@@ -67,6 +68,7 @@ def retrieve_similar(query: str, topic_id: int, top_k: int = 3):
     Given a query string and a topic_id, returns the top_k most
     semantically similar past messages within that topic only.
     """
+    start = time.time()
     query_vector = embeddings_model.embed_query(query)
 
     results = client.search(
@@ -82,6 +84,9 @@ def retrieve_similar(query: str, topic_id: int, top_k: int = 3):
     ),
     limit=top_k
 )
+    
+    elapsed = (time.time() - start) * 1000
+    print(f"Retrieval latency: {elapsed:.2f}ms")
 
     return [
         {

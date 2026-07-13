@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
+import SessionBrief from '@/app/components/SessionBrief'
 
 const API = 'http://localhost:8000'
 
@@ -60,16 +61,32 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
 
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
+      let hasContent = false
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
         const chunk = decoder.decode(value)
+        if (chunk) {
+          hasContent = true
+          setMessages(prev => {
+            const updated = [...prev]
+            updated[updated.length - 1] = {
+              role: 'assistant',
+              content: updated[updated.length - 1].content + chunk
+            }
+            return updated
+          })
+        }
+      }
+
+      // If nothing streamed back — API was likely rate limited
+      if (!hasContent) {
         setMessages(prev => {
           const updated = [...prev]
           updated[updated.length - 1] = {
             role: 'assistant',
-            content: updated[updated.length - 1].content + chunk
+            content: '⚠️ The AI is currently overloaded. Please wait a minute and try again.'
           }
           return updated
         })
@@ -78,6 +95,17 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
     } catch (e) {
       console.error('Chat error', e)
       setRetrieving(false)
+      setMessages(prev => {
+        const updated = [...prev]
+        const last = updated[updated.length - 1]
+        if (last?.role === 'assistant' && !last.content) {
+          updated[updated.length - 1] = {
+            role: 'assistant',
+            content: '⚠️ Something went wrong. Please try again in a moment.'
+          }
+        }
+        return updated
+      })
     } finally {
       setStreaming(false)
     }
@@ -118,11 +146,13 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
               className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm ${
                 msg.role === 'user'
                   ? 'bg-violet-600 text-white rounded-br-sm'
+                  : msg.content.startsWith('⚠️')
+                  ? 'bg-zinc-900 border border-yellow-800/50 text-yellow-400 rounded-bl-sm'
                   : 'bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-bl-sm'
               }`}
             >
               {msg.role === 'assistant' ? (
-                <div style={{ fontSize: '13px', lineHeight: '1.7', color: '#d4d4d8' }}>
+                <div style={{ fontSize: '13px', lineHeight: '1.7', color: msg.content.startsWith('⚠️') ? '#facc15' : '#d4d4d8' }}>
                   <ReactMarkdown
                     components={{
                       p: ({children}) => (
@@ -186,6 +216,8 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
 
         <div ref={bottomRef} />
       </div>
+
+      <SessionBrief topicId={topicId} />
 
       {/* Input */}
       <div className="border-t border-zinc-800 p-4 flex gap-3">

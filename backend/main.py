@@ -6,7 +6,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 from planner import generate_plan, save_plan
 from datetime import datetime
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.schema import HumanMessage, SystemMessage
+import os
 import json
+import os
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
@@ -166,17 +170,13 @@ def get_topic(topic_id: int):
 # ---------- CHAT ROUTE ----------
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    """
-    Main chat endpoint. Retrieves context, streams Gemini response,
-    saves both messages to SQLite and Qdrant.
-    """
     db = SessionLocal()
     topic = db.query(Topic).filter(Topic.id == req.topic_id).first()
     if not topic:
         db.close()
         raise HTTPException(status_code=404, detail="Topic not found")
 
-    # Get last 6 messages for short-term context
+    # Get last 6 messages
     recent = db.query(Message).filter(
         Message.topic_id == req.topic_id
     ).order_by(Message.created_at.desc()).limit(6).all()
@@ -184,7 +184,7 @@ async def chat(req: ChatRequest):
         {"role": m.role, "content": m.content}
         for m in reversed(recent)
     ]
-
+    
     # Retrieve semantically similar past messages from Qdrant
     retrieved_context = retrieve_similar(
         query=req.message,
@@ -202,14 +202,13 @@ async def chat(req: ChatRequest):
     db.commit()
     db.refresh(user_msg)
 
-    # Embed and store user message in Qdrant
+   # Embed and store user message in Qdrant
     embed_and_store(
         text=req.message,
         topic_id=req.topic_id,
         message_id=user_msg.id,
         role="user"
     )
-
     # Collect full response for saving after streaming
     full_response = []
 
@@ -218,7 +217,7 @@ async def chat(req: ChatRequest):
             user_message=req.message,
             topic_name=topic.name,
             recent_messages=recent_messages,
-            retrieved_context=retrieved_context
+            retrieved_context=retrieved_context,
         ):
             full_response.append(token)
             yield token
@@ -283,3 +282,88 @@ def get_weakspots(topic_id: int):
                 })
     db.close()
     return struggling
+
+@app.get("/topics/{topic_id}/brief")
+async def get_session_brief(topic_id: int):
+    db = SessionLocal()
+    topic = db.query(Topic).filter(Topic.id == topic_id).first()
+    if not topic:
+        db.close()
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    # Get last 10 messages
+    recent = db.query(Message).filter(
+        Message.topic_id == topic_id
+    ).order_by(Message.created_at.desc()).limit(10).all()
+
+    # Get struggling tasks
+    plan = db.query(Plan).filter(Plan.topic_id == topic_id).first()
+    struggling = []
+    completed = []
+    if plan:
+        for week in plan.weeks:
+            for task in week.tasks:
+                if task.status == "struggling":
+                    struggling.append(task.description)
+                elif task.status == "done":
+                    completed.append(task.description)
+
+    db.close()
+
+    if not recent:
+        return {"brief": None}
+
+    # Build context for Gemini
+    messages_text = "\n".join([
+        f"{m.role}: {m.content[:200]}"
+        for m in reversed(recent)
+    ])
+
+    struggling_text = "\n".join(struggling) if struggling else "None"
+    completed_text = f"{len(completed)} tasks completed so far"
+
+    
+
+    MODELS = [
+        "models/gemini-2.5-flash-lite",
+        "models/gemini-2.0-flash-lite",
+        "models/gemini-2.0-flash",
+    ]
+
+    prompt = f"""Based on this student's recent study history for "{topic.name}", write a brief 3-line pre-session summary.
+
+Recent messages:
+{messages_text}
+
+Struggling tasks:
+{struggling_text}
+
+Progress: {completed_text}
+
+Write exactly 3 short lines:
+1. What they covered last session (1 line)
+2. What they're struggling with if anything (1 line, skip if nothing)
+3. What to focus on today (1 line)
+
+Be specific, encouraging, and concise. No bullet points, just 3 plain lines."""
+
+    last_error = None
+    for model_name in MODELS:
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model=model_name,
+                google_api_key=os.getenv("GEMINI_API_KEY"),
+                temperature=0.3
+            )
+            response = await llm.ainvoke([
+                SystemMessage(content="You are a concise study coach writing pre-session briefs."),
+                HumanMessage(content=prompt)
+            ])
+            return {"brief": response.content.strip()}
+        except Exception as e:
+            last_error = e
+            continue
+    if len(recent) < 5:
+        return {"brief": None, "error": False}
+
+    return {"brief": None, "error": True, "message": "AI overloaded"}

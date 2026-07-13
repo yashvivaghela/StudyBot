@@ -26,7 +26,7 @@ def build_prompt(
     user_message: str,
     topic_name: str,
     recent_messages: list,
-    retrieved_context: list
+    retrieved_context: list,
 ) -> list:
     """
     Builds the full prompt we send to Gemini.
@@ -44,6 +44,7 @@ Use it to:
 - Be encouraging but honest
 
 FORMATTING RULES — always follow these:
+# - If retrieved past context contains related concepts the student has asked about before, explicitly mention the connection — e.g. "This is similar to what you asked about two pointers last week"
 - Use headers (##) to break up long responses into clear sections
 - Use bullet points or numbered lists for steps, examples, or multiple points
 - Use **bold** for key terms and important concepts
@@ -89,13 +90,13 @@ async def stream_response(
     user_message: str,
     topic_name: str,
     recent_messages: list,
-    retrieved_context: list
+    retrieved_context: list,
 ):
     messages = build_prompt(
         user_message=user_message,
         topic_name=topic_name,
         recent_messages=recent_messages,
-        retrieved_context=retrieved_context
+        retrieved_context=retrieved_context,
     )
 
     last_error = None

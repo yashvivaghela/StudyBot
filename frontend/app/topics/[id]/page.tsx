@@ -50,6 +50,7 @@ export default function TopicWorkspace() {
   const [topic, setTopic] = useState<Topic | null>(null)
   const [loading, setLoading] = useState(true)
   const [planOpen, setPlanOpen] = useState(true)
+  const [prefillMessage, setPrefillMessage] = useState('')
 
   useEffect(() => { fetchTopic() }, [topicId])
 
@@ -131,7 +132,8 @@ export default function TopicWorkspace() {
     {/* Plan content */}
     <div className="flex-1 overflow-y-auto">
       {topic.plan ? (
-        <PlanDashboard plan={topic.plan} onUpdateTask={updateTaskStatus} />
+        <PlanDashboard plan={topic.plan} onUpdateTask={updateTaskStatus} 
+        onTaskClick={(desc) => setPrefillMessage(`Help me with this task: ${desc}`)}/>
       ) : (
         <div className="p-6">
           <p className="text-zinc-500 text-sm">No plan yet</p>
@@ -159,6 +161,8 @@ export default function TopicWorkspace() {
       topicId={Number(topicId)}
       topicName={topic.name}
       initialMessages={topic.messages}
+    prefillMessage={prefillMessage}
+    onPrefillUsed={() => setPrefillMessage('')}
     />
   </div>
 
