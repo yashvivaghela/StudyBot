@@ -4,13 +4,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pathlib import Path
 from dotenv import load_dotenv
-from planner import generate_plan, save_plan
 from datetime import datetime
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import HumanMessage, SystemMessage
+# from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_groq import ChatGroq
 import os
 import json
-import os
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
@@ -18,9 +18,21 @@ from db import SessionLocal, init_db, Topic, Message, Plan, PlanWeek, PlanTask
 from vector_store import embed_and_store, retrieve_similar, init_vector_store
 from chain import stream_response
 from planner import generate_plan, save_plan
+from planner import generate_adjusted_plan
 
 
 app = FastAPI()
+
+# MODELS = [
+    #     "models/gemini-2.5-flash-lite",
+    #     "models/gemini-2.0-flash-lite",
+    #     "models/gemini-2.0-flash",
+    # ]
+
+MODELS = [
+    "llama-3.3-70b-versatile",  # smarter model for plan generation
+    "llama-3.1-8b-instant",
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,6 +61,11 @@ class ChatRequest(BaseModel):
 
 class UpdateTaskRequest(BaseModel):
     status: str  # "todo" | "done" | "struggling"
+
+class AdjustPlanRequest(BaseModel):
+    reason: str
+    cached_weeks: list = None 
+    summary: str = None
 
 
 # ---------- TOPIC ROUTES ----------
@@ -184,6 +201,15 @@ async def chat(req: ChatRequest):
         {"role": m.role, "content": m.content}
         for m in reversed(recent)
     ]
+    # Detect plan change intent
+    plan_change = await detect_plan_change_intent(req.message)
+    print(f"DEBUG intent: {plan_change}")
+    plan_change_detected = None
+
+    if plan_change.get("action") == "adjust_plan":
+        plan_change_detected = {
+            "reason": req.message
+        }
     
     # Retrieve semantically similar past messages from Qdrant
     retrieved_context = retrieve_similar(
@@ -213,11 +239,15 @@ async def chat(req: ChatRequest):
     full_response = []
 
     async def generate():
+        if plan_change_detected:
+            signal = f"__PLAN_CHANGE__{json.dumps(plan_change_detected)}__PLANEND__\n"
+            yield signal
         async for token in stream_response(
             user_message=req.message,
             topic_name=topic.name,
             recent_messages=recent_messages,
             retrieved_context=retrieved_context,
+            plan_change_detected=plan_change_detected
         ):
             full_response.append(token)
             yield token
@@ -322,13 +352,7 @@ async def get_session_brief(topic_id: int):
     struggling_text = "\n".join(struggling) if struggling else "None"
     completed_text = f"{len(completed)} tasks completed so far"
 
-    
 
-    MODELS = [
-        "models/gemini-2.5-flash-lite",
-        "models/gemini-2.0-flash-lite",
-        "models/gemini-2.0-flash",
-    ]
 
     prompt = f"""Based on this student's recent study history for "{topic.name}", write a brief 3-line pre-session summary.
 
@@ -350,11 +374,12 @@ Be specific, encouraging, and concise. No bullet points, just 3 plain lines."""
     last_error = None
     for model_name in MODELS:
         try:
-            llm = ChatGoogleGenerativeAI(
-                model=model_name,
-                google_api_key=os.getenv("GEMINI_API_KEY"),
-                temperature=0.3
-            )
+
+            llm = ChatGroq(
+    model=model_name,
+    api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0.3
+)
             response = await llm.ainvoke([
                 SystemMessage(content="You are a concise study coach writing pre-session briefs."),
                 HumanMessage(content=prompt)
@@ -367,3 +392,229 @@ Be specific, encouraging, and concise. No bullet points, just 3 plain lines."""
         return {"brief": None, "error": False}
 
     return {"brief": None, "error": True, "message": "AI overloaded"}
+
+async def detect_plan_change_intent(message: str) -> dict:
+    """
+    Checks if user wants to change their study plan.
+    Returns {action: 'adjust_plan' | 'none', reason: str}
+    """
+
+
+    prompt = f"""The user said: "{message}"
+
+Does the user want to change or adjust their study plan?
+Reply with ONLY valid JSON:
+
+If yes: {{"action": "adjust_plan", "reason": "brief reason why"}}
+If no: {{"action": "none"}}
+
+Examples that mean YES:
+- "I only have 2 weeks left instead of 4"
+- "Can we focus more on dynamic programming"
+- "I want to add more tree problems"
+- "adjust my plan"
+- "change my schedule"
+- "I'm running out of time"
+
+Examples that mean NO:
+- "explain binary search"
+- "mark this as done"
+- "what is a linked list"
+- "Help me with this task: [any task description]"
+- Any question or explanation request
+
+If unsure → {{"action": "none"}}"""
+
+    for model_name in MODELS:
+        try:
+            llm = ChatGroq(
+                model=model_name,
+                api_key=os.getenv("GROQ_API_KEY"),
+                temperature=0
+            )
+            response = await llm.ainvoke([
+                SystemMessage(content="You detect plan change intents. Reply only with JSON."),
+                HumanMessage(content=prompt)
+            ])
+            raw = response.content.strip().replace("```json", "").replace("```", "").strip()
+            return json.loads(raw)
+        except Exception as e:
+            print(f"Plan intent detection failed: {e}")
+            continue
+
+    return {"action": "none"}
+
+
+@app.post("/topics/{topic_id}/adjust-plan")
+async def adjust_plan(topic_id: int, req: AdjustPlanRequest):
+    """
+    Generates new remaining weeks based on current progress and user request.
+    Deletes uncompleted tasks and saves new ones.
+    """
+    db = SessionLocal()
+    topic = db.query(Topic).filter(Topic.id == topic_id).first()
+    if not topic:
+        db.close()
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    plan = db.query(Plan).filter(Plan.topic_id == topic_id).first()
+    if not plan:
+        db.close()
+        raise HTTPException(status_code=404, detail="No plan found")
+
+    # Categorize tasks
+    completed_tasks = []
+    struggling_tasks = []
+    remaining_tasks = []
+    weeks_to_delete = []
+
+    for week in plan.weeks:
+        has_any_done = any(t.status == "done" for t in week.tasks)
+        
+        if has_any_done:
+            # Keep this week entirely — student has progress here
+            for task in week.tasks:
+                if task.status == "done":
+                    completed_tasks.append(task.description)
+                elif task.status == "struggling":
+                    struggling_tasks.append(task.description)
+                    remaining_tasks.append(task.description)
+                else:
+                    remaining_tasks.append(task.description)
+            # Don't add to weeks_to_delete — keep it intact
+        else:
+            # No progress at all — safe to delete and replace
+            for task in week.tasks:
+                if task.status == "struggling":
+                    struggling_tasks.append(task.description)
+                    remaining_tasks.append(task.description)
+                else:
+                    remaining_tasks.append(task.description)
+            weeks_to_delete.append(week)
+
+    # user_request = req.get("reason", "User requested plan adjustment")
+    user_request = req.reason
+    if req.cached_weeks:
+        new_plan_data = {
+            "weeks": req.cached_weeks,
+            "summary": req.summary or "Plan adjusted"
+        }
+    else:
+        # Fall back to generating fresh — no preview was shown
+        completed_tasks = []
+        struggling_tasks = []
+        remaining_tasks = []
+        # Generate new plan
+        current_week_count = len(plan.weeks) 
+    
+        new_plan_data = await generate_adjusted_plan(
+            topic_name=topic.name,
+            goal=topic.goal,
+            completed_tasks=completed_tasks,
+            struggling_tasks=struggling_tasks,
+            remaining_tasks=remaining_tasks,
+            user_request=user_request,
+            current_week_count=current_week_count
+        )
+
+    # Delete uncompleted weeks
+    for week in weeks_to_delete:
+        for task in week.tasks:
+            if task.status != "done":
+                db.delete(task)
+        db.commit()
+        # Only delete week if all tasks deleted
+        remaining = db.query(PlanTask).filter(PlanTask.week_id == week.id).all()
+        if not remaining:
+            db.delete(week)
+    db.commit()
+
+    # Find highest existing week number
+    existing_weeks = db.query(PlanWeek).filter(PlanWeek.plan_id == plan.id).all()
+    start_week = max([w.week_number for w in existing_weeks], default=0) + 1
+
+    # Save new weeks
+    saved_weeks = []
+    for i, week_data in enumerate(new_plan_data["weeks"]):
+        week = PlanWeek(
+            plan_id=plan.id,
+            week_number=start_week + i,
+            focus_area=week_data["focus_area"]
+        )
+        db.add(week)
+        db.commit()
+        db.refresh(week)
+
+        tasks = []
+        for task_desc in week_data["tasks"]:
+            task = PlanTask(
+                week_id=week.id,
+                description=task_desc,
+                status="todo"
+            )
+            db.add(task)
+            db.commit()
+            db.refresh(task)
+            tasks.append({"id": task.id, "description": task.description, "status": task.status})
+
+        saved_weeks.append({
+            "id": week.id,
+            "week_number": week.week_number,
+            "focus_area": week.focus_area,
+            "tasks": tasks
+        })
+
+    db.close()
+    return {
+        "success": True,
+        "summary": new_plan_data.get("summary", "Plan adjusted"),
+        "new_weeks": saved_weeks
+    }
+
+@app.post("/topics/{topic_id}/preview-plan")
+async def preview_plan(topic_id: int, req: AdjustPlanRequest):
+    """Generates adjusted plan preview WITHOUT saving to DB."""
+    db = SessionLocal()
+    topic = db.query(Topic).filter(Topic.id == topic_id).first()
+    if not topic:
+        db.close()
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    plan = db.query(Plan).filter(Plan.topic_id == topic_id).first()
+    if not plan:
+        db.close()
+        raise HTTPException(status_code=404, detail="No plan found")
+
+    completed_tasks = []
+    struggling_tasks = []
+    remaining_tasks = []
+
+    for week in plan.weeks:
+        for task in week.tasks:
+            if task.status == "done":
+                completed_tasks.append(task.description)
+            elif task.status == "struggling":
+                struggling_tasks.append(task.description)
+                remaining_tasks.append(task.description)
+            else:
+                remaining_tasks.append(task.description)
+
+    db.close()
+
+    current_week_count = len(plan.weeks) 
+    new_plan_data = await generate_adjusted_plan(
+        topic_name=topic.name,
+        goal=topic.goal,
+        completed_tasks=completed_tasks,
+        struggling_tasks=struggling_tasks,
+        remaining_tasks=remaining_tasks,
+        user_request=req.reason,
+        current_week_count=current_week_count
+
+    )
+
+    return {
+        "preview": new_plan_data["weeks"],
+        "summary": new_plan_data.get("summary", "Plan adjusted"),
+        "reason": req.reason
+    }

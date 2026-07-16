@@ -1,23 +1,40 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema import HumanMessage, SystemMessage
+# from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
+# from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 from pathlib import Path
+from langchain_groq import ChatGroq
 import os
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
-# llm = ChatGoogleGenerativeAI(
-#     model="gemini-2.5-flash-lite",
-#     google_api_key=os.getenv("GEMINI_API_KEY"),
-#     streaming=True,
-#     temperature=0.7
-# )
+# def get_llm(model_name: str):
+#     return ChatGoogleGenerativeAI(
+#         model=model_name,
+#         google_api_key=os.getenv("GEMINI_API_KEY"),
+#         disable_streaming=False,
+#         temperature=0.7
+#     )
+
+
+# MODELS = [
+#     "models/gemini-2.5-flash-lite",
+#     "models/gemini-2.0-flash-lite",
+#     "models/gemini-2.0-flash",
+# ]
+
+MODELS = [
+    "llama-3.1-8b-instant",   # fastest, free
+    "llama-3.3-70b-versatile", # smarter, still free
+    "gemma2-9b-it",            # fallback
+]
+
 def get_llm(model_name: str):
-    return ChatGoogleGenerativeAI(
+    return ChatGroq(
         model=model_name,
-        google_api_key=os.getenv("GEMINI_API_KEY"),
-        disable_streaming=False,
+        api_key=os.getenv("GROQ_API_KEY"),
         temperature=0.7
     )
 
@@ -27,6 +44,7 @@ def build_prompt(
     topic_name: str,
     recent_messages: list,
     retrieved_context: list,
+    plan_change_detected: dict = None
 ) -> list:
     """
     Builds the full prompt we send to Gemini.
@@ -55,6 +73,8 @@ FORMATTING RULES — always follow these:
 - Never write walls of text — if a response is long, structure it with headers
 
 Keep responses clear, focused and well structured. Use examples where helpful."""
+    # if plan_change_detected:
+    #     system_content += f"\n\nIMPORTANT: The student wants to adjust their plan. Reply in MAX 2 sentences acknowledging their request. Do NOT write out any plan, schedule, weeks, days or tasks in your response. Just acknowledge and say a confirmation will appear below. Example: 'Got it! I can adjust your plan based on your request. Please confirm the adjustment using the button below.'"
 
     # --- Retrieved past context (from Qdrant) ---
     context_block = ""
@@ -80,23 +100,23 @@ Keep responses clear, focused and well structured. Use examples where helpful.""
     ]
 
 
-MODELS = [
-    "models/gemini-2.5-flash-lite",
-    "models/gemini-2.0-flash-lite",
-    "models/gemini-2.0-flash",
-]
 
 async def stream_response(
     user_message: str,
     topic_name: str,
     recent_messages: list,
     retrieved_context: list,
+    plan_change_detected: dict = None
 ):
+    if plan_change_detected:
+        yield "Got it! I can adjust your plan based on your request. Please preview and confirm the adjustment using the button below."
+        return
     messages = build_prompt(
         user_message=user_message,
         topic_name=topic_name,
         recent_messages=recent_messages,
         retrieved_context=retrieved_context,
+        plan_change_detected=plan_change_detected
     )
 
     last_error = None

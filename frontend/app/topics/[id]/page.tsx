@@ -51,6 +51,7 @@ export default function TopicWorkspace() {
   const [loading, setLoading] = useState(true)
   const [planOpen, setPlanOpen] = useState(true)
   const [prefillMessage, setPrefillMessage] = useState('')
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => { fetchTopic() }, [topicId])
 
@@ -59,6 +60,7 @@ export default function TopicWorkspace() {
       const res = await fetch(`${API}/topics/${topicId}`)
       const data = await res.json()
       setTopic(data)
+      setRefreshKey(prev => prev + 1) 
     } catch (e) {
       console.error(e)
     } finally {
@@ -132,8 +134,11 @@ export default function TopicWorkspace() {
     {/* Plan content */}
     <div className="flex-1 overflow-y-auto">
       {topic.plan ? (
-        <PlanDashboard plan={topic.plan} onUpdateTask={updateTaskStatus} 
-        onTaskClick={(desc) => setPrefillMessage(`Help me with this task: ${desc}`)}/>
+        <PlanDashboard 
+        key={refreshKey}
+        plan={topic.plan} onUpdateTask={updateTaskStatus} 
+        onTaskClick={(desc) => setPrefillMessage(`Help me with this task: ${desc}`)}
+        />
       ) : (
         <div className="p-6">
           <p className="text-zinc-500 text-sm">No plan yet</p>
@@ -163,6 +168,7 @@ export default function TopicWorkspace() {
       initialMessages={topic.messages}
     prefillMessage={prefillMessage}
     onPrefillUsed={() => setPrefillMessage('')}
+    onTaskUpdate={fetchTopic}
     />
   </div>
 

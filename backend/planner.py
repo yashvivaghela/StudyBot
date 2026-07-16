@@ -1,33 +1,42 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import HumanMessage, SystemMessage
+# from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 from pathlib import Path
+from langchain_groq import ChatGroq
+from db import Plan, PlanWeek, PlanTask
 import os
 import json
+import re
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite",
-    google_api_key=os.getenv("GEMINI_API_KEY"),
-    temperature=0.3  # lower than chat — we want consistent structured output, not creativity
-)
+# llm = ChatGoogleGenerativeAI(
+#     model="gemini-2.5-flash-lite",
+#     google_api_key=os.getenv("GEMINI_API_KEY"),
+#     temperature=0.3  # lower than chat — we want consistent structured output, not creativity
+# )
 
+
+# MODELS = [
+#     "models/gemini-2.5-flash-lite",
+#     "models/gemini-2.0-flash-lite",
+#     "models/gemini-2.0-flash",
+# ]
 MODELS = [
-    "models/gemini-2.5-flash-lite",
-    "models/gemini-2.0-flash-lite",
-    "models/gemini-2.0-flash",
+    "llama-3.3-70b-versatile",  # smarter model for plan generation
+    "llama-3.1-8b-instant",
 ]
 
 async def generate_plan(topic_name: str, goal: str) -> dict:
     last_error = None
     for model_name in MODELS:
         try:
-            llm = ChatGoogleGenerativeAI(
-                model=model_name,
-                google_api_key=os.getenv("GEMINI_API_KEY"),
-                temperature=0.3
-            )
+            llm = ChatGroq(
+    model=model_name,
+    api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0.3
+)
             system_message = SystemMessage(content="""You are a study plan generator.
 Your job is to create structured, realistic study plans based on the student's goal.
 You must ALWAYS respond with valid JSON only — no explanation, no markdown, no backticks.
@@ -82,7 +91,7 @@ async def save_plan(topic_id: int, plan_data: dict, db) -> dict:
     Plan → PlanWeeks → PlanTasks
     Returns the saved plan as a dict for the API response.
     """
-    from db import Plan, PlanWeek, PlanTask
+    
 
     # Create the top-level plan
     plan = Plan(
@@ -138,3 +147,93 @@ async def save_plan(topic_id: int, plan_data: dict, db) -> dict:
         "duration_weeks": plan.duration_weeks,
         "weeks": weeks_result
     }
+
+async def generate_adjusted_plan(
+    topic_name: str,
+    goal: str,
+    completed_tasks: list,
+    struggling_tasks: list,
+    remaining_tasks: list,
+    user_request: str,
+    current_week_count: int = None
+) -> dict:
+    """
+    Takes current plan state and user request/struggle context,
+    regenerates only the remaining weeks.
+    """
+    completed_text = "\n".join([f"- {t}" for t in completed_tasks]) or "None yet"
+    struggling_text = "\n".join([f"- {t}" for t in struggling_tasks]) or "None"
+    remaining_text = "\n".join([f"- {t}" for t in remaining_tasks]) or "None"
+
+    
+    weeks_match = re.search(r'(\d+)\s*week', user_request.lower())
+    if weeks_match:
+        time_constraint = f"EXACTLY {weeks_match.group(1)} weeks"
+    elif current_week_count:
+        time_constraint = f"approximately {current_week_count} weeks (preserve the current plan length unless the user's request implies otherwise)"
+    else:
+        time_constraint = "as few weeks as needed"
+
+    prompt = f"""You are adjusting a study plan for: "{topic_name}"
+Original goal: {goal}
+Reason for adjustment: {user_request}
+
+TIME CONSTRAINT — NON-NEGOTIABLE: Generate {time_constraint}.
+You MUST generate exactly this many weeks — not more, not less.
+
+Current progress:
+Completed tasks:
+{completed_text}
+
+Struggling with:
+{struggling_text}
+
+Remaining tasks (these will be replaced):
+{remaining_text}
+
+Generate a NEW set of remaining weeks that:
+- Strictly generates {time_constraint} — no more, no less
+- Accounts for what's already completed (don't repeat those)
+- Prioritizes the most critical topics given the limited time
+- Has 3-5 specific actionable tasks per week
+
+Respond with ONLY valid JSON, no markdown, no backticks:
+{{
+    "weeks": [
+        {{
+            "week_number": 1,
+            "focus_area": "focus area name here",
+            "tasks": [
+                "specific task 1",
+                "specific task 2",
+                "specific task 3"
+            ]
+        }}
+    ],
+    "summary": "one line explaining what changed and why"
+}}"""
+
+    last_error = None
+    for model_name in MODELS:
+        try:
+            # llm = ChatGoogleGenerativeAI(
+            #     model=model_name,
+            #     google_api_key=os.getenv("GEMINI_API_KEY"),
+            #     temperature=0.3
+            # )
+            llm = ChatGroq(
+    model=model_name,
+    api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0.3
+)
+            response = await llm.ainvoke([
+                SystemMessage(content="You are a study plan adjuster. Reply only with JSON."),
+                HumanMessage(content=prompt)
+            ])
+            raw = response.content.strip().replace("```json", "").replace("```", "").strip()
+            return json.loads(raw)
+        except Exception as e:
+            last_error = e
+            continue
+
+    raise Exception(f"All models failed: {last_error}")

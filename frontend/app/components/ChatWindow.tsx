@@ -18,14 +18,29 @@ interface Props {
   initialMessages: Message[]
   prefillMessage?: string
   onPrefillUsed?: () => void
+  onTaskUpdate?: () => void
+  
+}
+interface PlanChange {
+  reason: string
+  preview?: {
+    week_number: number
+    focus_area: string
+    tasks: string[]
+  }[]
+  summary?: string
+  confirmed?: boolean
+  error?: string
 }
 
-export default function ChatWindow({ topicId, topicName, initialMessages, prefillMessage, onPrefillUsed }: Props) {
+export default function ChatWindow({ topicId, topicName, initialMessages, prefillMessage, onPrefillUsed ,onTaskUpdate}: Props) {
   const [messages, setMessages] = useState<Message[]>(initialMessages)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [retrieving, setRetrieving] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const [pendingPlanChange, setPendingPlanChange] = useState<PlanChange | null>(null)
+  const [applyingPlanChange, setApplyingPlanChange] = useState(false)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -37,15 +52,89 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
       onPrefillUsed?.()
     }
   }, [prefillMessage])
+ async function confirmPlanChange() {
+  if (!pendingPlanChange) return
+  setApplyingPlanChange(true)
+
+  // Step 1 — if no preview yet, fetch preview first
+  if (!pendingPlanChange.preview) {
+    try {
+      const res = await fetch(`${API}/topics/${topicId}/preview-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: pendingPlanChange.reason })
+      })
+      if (!res.ok) {
+        setPendingPlanChange({
+          ...pendingPlanChange,
+          error: 'AI is overloaded. Please wait a minute and try again.'
+        })
+        setApplyingPlanChange(false)
+        return
+      }
+      const data = await res.json()
+      // Update pill with preview
+      setPendingPlanChange({
+        ...pendingPlanChange,
+        preview: data.preview,
+        summary: data.summary
+      })
+      setApplyingPlanChange(false)
+    } catch (e) {
+      setPendingPlanChange({
+        ...pendingPlanChange,
+        error: 'Something went wrong. Please try again.'
+      })
+      setApplyingPlanChange(false)
+    }
+    return
+  }
+
+  // Step 2 — preview shown, now actually save
+  try {
+    const res = await fetch(`${API}/topics/${topicId}/adjust-plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: pendingPlanChange.reason,cached_weeks: pendingPlanChange.preview,  // ← send the preview data
+    summary: pendingPlanChange.summary })
+    })
+    if (!res.ok) {
+      setPendingPlanChange({
+        ...pendingPlanChange,
+        error: 'AI is overloaded. Please wait a minute and try again.'
+      })
+      setApplyingPlanChange(false)
+      return
+    }
+
+    const data = await res.json()
+    setPendingPlanChange(null)
+    setApplyingPlanChange(false)
+    onTaskUpdate?.()
+
+    setMessages(prev => [...prev, {
+      role: 'assistant',
+      content: `✅ Plan updated! ${data.summary}`
+    }])
+  } catch (e) {
+    setPendingPlanChange({
+      ...pendingPlanChange,
+      error: 'Something went wrong. Please try again.'
+    })
+    setApplyingPlanChange(false)
+  }
+}
 
   async function sendMessage() {
     if (!input.trim() || streaming) return
 
     const userMessage = input.trim()
     setInput('')
+    setPendingPlanChange(null)
 
     setMessages(prev => [...prev, { role: 'user', content: userMessage }])
     setRetrieving(true)
+    
 
     try {
       const res = await fetch(`${API}/chat`, {
@@ -67,6 +156,37 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
         const { done, value } = await reader.read()
         if (done) break
         const chunk = decoder.decode(value)
+        if (chunk.includes('__PLAN_CHANGE__') && chunk.includes('__PLANEND__')) {
+    try {
+      const signalStart = chunk.indexOf('__PLAN_CHANGE__')
+      const signalEnd = chunk.indexOf('__PLANEND__') + '__PLANEND__'.length
+      const signal = chunk.slice(signalStart, signalEnd)
+      const jsonStr = signal.replace('__PLAN_CHANGE__', '').replace('__PLANEND__', '').trim()
+      const planData = JSON.parse(jsonStr)
+      setPendingPlanChange(planData)
+      
+      // Render anything after the signal
+      const remainder = chunk.slice(signalEnd)
+      if (remainder) {
+        hasContent = true
+        setMessages(prev => {
+          const updated = [...prev]
+          updated[updated.length - 1] = {
+            role: 'assistant',
+            content: updated[updated.length - 1].content + remainder
+          }
+          return updated
+        })
+      }
+      // invalidate cache is new message is there 
+      sessionStorage.removeItem(`brief_${topicId}`)
+      sessionStorage.removeItem(`brief_time_${topicId}`)
+    } catch (e) {
+      console.error('Failed to parse plan change signal', e)
+    }
+    continue
+  }
+
         if (chunk) {
           hasContent = true
           setMessages(prev => {
@@ -117,6 +237,7 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
       sendMessage()
     }
   }
+  
 
   return (
     <div className="flex flex-col h-full">
@@ -213,6 +334,107 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
             </div>
           </div>
         )}
+        {/* Plan change proposal */}
+{pendingPlanChange && (
+  <div className="flex justify-start">
+    <div className="bg-zinc-900 border border-violet-800 rounded-2xl px-4 py-4 max-w-[80%]">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-5 h-5 rounded-full bg-violet-500/20 border border-violet-800 flex items-center justify-center text-xs">✦</div>
+        <p className="text-violet-400 text-xs font-medium uppercase tracking-wide">Plan Adjustment</p>
+      </div>
+
+      {!pendingPlanChange.preview ? (
+        // Step 1 — show reason, ask to preview
+        <>
+          <p className="text-zinc-300 text-xs mb-1">
+            <span className="text-white font-medium">Reason:</span> {pendingPlanChange.reason}
+          </p>
+          <p className="text-zinc-500 text-xs mb-4">
+            Your completed tasks will be preserved. Click below to preview the new plan before applying.
+          </p>
+          {pendingPlanChange.error && (
+  <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-yellow-950/30 border border-yellow-800/50">
+    <span className="text-yellow-500 text-xs">⚠️</span>
+    <p className="text-yellow-400 text-xs">{pendingPlanChange.error}</p>
+    <button
+      onClick={() => setPendingPlanChange({ ...pendingPlanChange, error: undefined })}
+      className="ml-auto text-yellow-600 hover:text-yellow-400 text-xs"
+    >
+      ✕
+    </button>
+  </div>
+)}
+          <div className="flex gap-2">
+            
+            <button
+              onClick={confirmPlanChange}
+              disabled={applyingPlanChange}
+              className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-medium transition-colors"
+            >
+              {applyingPlanChange ? 'Generating preview...' : 'Preview new plan'}
+            </button>
+            <button
+              onClick={() => setPendingPlanChange(null)}
+              className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        // Step 2 — show preview, ask to confirm
+        <>
+          <p className="text-zinc-400 text-xs mb-3">{pendingPlanChange.summary}</p>
+          <div className="flex flex-col gap-2 mb-4">
+            {pendingPlanChange.preview.map((week, i) => (
+              <div key={i} className="bg-zinc-800/50 rounded-lg p-2">
+                <p className="text-white text-xs font-medium mb-1">
+                  Week {week.week_number} — {week.focus_area}
+                </p>
+                <ul className="flex flex-col gap-0.5">
+                  {week.tasks.map((task, j) => (
+                    <li key={j} className="text-zinc-400 text-xs flex items-start gap-1">
+                      <span className="text-zinc-600 flex-shrink-0">·</span>
+                      {task}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+           {pendingPlanChange.error && (
+  <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-yellow-950/30 border border-yellow-800/50">
+    <span className="text-yellow-500 text-xs">⚠️</span>
+    <p className="text-yellow-400 text-xs">{pendingPlanChange.error}</p>
+    <button
+      onClick={() => setPendingPlanChange({ ...pendingPlanChange, error: undefined })}
+      className="ml-auto text-yellow-600 hover:text-yellow-400 text-xs"
+    >
+      ✕
+    </button>
+  </div>
+)}
+          <div className="flex gap-2">
+           
+            <button
+              onClick={confirmPlanChange}
+              disabled={applyingPlanChange}
+              className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-medium transition-colors"
+            >
+              {applyingPlanChange ? 'Applying...' : 'Apply this plan'}
+            </button>
+            <button
+              onClick={() => setPendingPlanChange(null)}
+              className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  </div>
+)}
 
         <div ref={bottomRef} />
       </div>
