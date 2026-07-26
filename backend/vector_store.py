@@ -63,27 +63,25 @@ def embed_and_store(text: str, topic_id: int, message_id: int, role: str):
     )
 
 
-def retrieve_similar(query: str, topic_id: int, top_k: int = 3):
+def retrieve_similar(query: str, topic_id: int, top_k: int = 3,near_duplicate_threshold: float = 0.97, role: str = None):
     """
     Given a query string and a topic_id, returns the top_k most
     semantically similar past messages within that topic only.
     """
     start = time.time()
     query_vector = embeddings_model.embed_query(query)
+    must_conditions = [
+        FieldCondition(key="topic_id", match=MatchValue(value=topic_id))
+    ]
+    if role:
+        must_conditions.append(FieldCondition(key="role", match=MatchValue(value=role)))
 
     results = client.search(
-    collection_name=COLLECTION_NAME,
-    query_vector=query_vector,
-    query_filter=Filter(
-        must=[
-            FieldCondition(
-                key="topic_id",
-                match=MatchValue(value=topic_id)
-            )
-        ]
-    ),
-    limit=top_k
-)
+        collection_name=COLLECTION_NAME,
+        query_vector=query_vector,
+        query_filter=Filter(must=must_conditions),
+        limit=top_k * 5
+    )
     
     elapsed = (time.time() - start) * 1000
     print(f"Retrieval latency: {elapsed:.2f}ms")

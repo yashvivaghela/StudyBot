@@ -137,7 +137,8 @@ export default function TopicWorkspace() {
         <PlanDashboard 
         key={refreshKey}
         plan={topic.plan} onUpdateTask={updateTaskStatus} 
-        onTaskClick={(desc) => setPrefillMessage(`Help me with this task: ${desc}`)}
+       onTaskClick={(desc) => setPrefillMessage(`Help me with this task: ${desc}`)}
+  onWeakSpotClick={(desc) => setPrefillMessage(`Can you re-explain ${desc}? I was struggling with this.`)}
         />
       ) : (
         <div className="p-6">

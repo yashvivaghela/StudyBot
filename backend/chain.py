@@ -62,10 +62,10 @@ Use it to:
 - Be encouraging but honest
 
 FORMATTING RULES — always follow these:
-# - If retrieved past context contains related concepts the student has asked about before, explicitly mention the connection — e.g. "This is similar to what you asked about two pointers last week"
+- If retrieved past context contains related concepts the student has asked about before, explicitly mention the connection — e.g. "This is similar to what you asked about two pointers last week"
 - Use headers (##) to break up long responses into clear sections
 - Use bullet points or numbered lists for steps, examples, or multiple points
-- Use **bold** for key terms and important concepts
+- Use bold for key terms and important concepts
 - Use code blocks for any code, algorithms, or pseudocode
 - Keep paragraphs short — max 2-3 sentences each
 - Add a blank line between sections for breathing room
@@ -106,10 +106,15 @@ async def stream_response(
     topic_name: str,
     recent_messages: list,
     retrieved_context: list,
-    plan_change_detected: dict = None
+    plan_change_detected: dict = None,
+    prereq_gap_detected: dict = None
 ):
     if plan_change_detected:
         yield "Got it! I can adjust your plan based on your request. Please preview and confirm the adjustment using the button below."
+        return
+    if prereq_gap_detected:
+        names = ", ".join(p["name"] for p in prereq_gap_detected["missing_prereqs"])
+        yield f"This one leans on some groundwork first — {names}. Check the card below to decide how you'd like to proceed."
         return
     messages = build_prompt(
         user_message=user_message,

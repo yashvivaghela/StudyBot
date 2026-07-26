@@ -14,6 +14,7 @@ class Topic(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)          # e.g. "LeetCode Prep"
     goal = Column(Text, nullable=True)               # original user description
+    prior_context = Column(Text, nullable=True, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     messages = relationship("Message", back_populates="topic")

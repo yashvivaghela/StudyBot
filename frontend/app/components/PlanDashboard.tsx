@@ -26,9 +26,10 @@ interface Props {
   plan: Plan
   onUpdateTask: (taskId: number, status: string) => void
   onTaskClick: (description: string) => void
+  onWeakSpotClick: (description: string) => void
 }
 
-export default function PlanDashboard({ plan, onUpdateTask,onTaskClick}: Props) {
+export default function PlanDashboard({ plan, onUpdateTask,onTaskClick,onWeakSpotClick}: Props) {
   const [openWeeks, setOpenWeeks] = useState<number[]>([1])
 
   const allTasks = plan.weeks.flatMap(w => w.tasks)
@@ -144,17 +145,31 @@ export default function PlanDashboard({ plan, onUpdateTask,onTaskClick}: Props) 
       })}
 
       {/* Weak spots */}
-      {allTasks.filter(t => t.status === 'struggling').length > 0 && (
-        <div className="mt-4 border-t border-zinc-800 pt-4">
-          <p className="text-xs text-zinc-500 mb-2">Weak spots</p>
-          {allTasks.filter(t => t.status === 'struggling').map(task => (
-            <div key={task.id} className="flex items-center gap-2 mb-1">
-              <span className="text-red-400 text-xs">⚠</span>
-              <p className="text-zinc-400 text-xs">{task.description}</p>
-            </div>
-          ))}
+{allTasks.filter(t => t.status === 'struggling').length > 0 && (
+  <div className="mt-6 border-t border-red-900/30 pt-4">
+    <div className="flex items-center gap-2 mb-3">
+      <span className="text-red-400 text-sm">⚠</span>
+      <p className="text-sm text-red-400 font-medium">Weak spots</p>
+      <span className="text-xs text-zinc-600">
+        ({allTasks.filter(t => t.status === 'struggling').length})
+      </span>
+    </div>
+    <div className="flex flex-col gap-2">
+      {allTasks.filter(t => t.status === 'struggling').map(task => (
+        <div
+          key={task.id}
+          onClick={() => onWeakSpotClick(task.description)}
+          className="flex items-start gap-2 p-3 rounded-xl border border-red-900/40 bg-red-950/10 cursor-pointer hover:border-red-700 hover:bg-red-950/20 transition-colors group"
+        >
+          <span className="text-red-400 text-xs mt-0.5">⚠</span>
+          <p className="text-xs text-zinc-300 group-hover:text-white leading-relaxed">
+            {task.description}
+          </p>
         </div>
-      )}
+      ))}
+    </div>
+  </div>
+)}
     </div>
   )
 }

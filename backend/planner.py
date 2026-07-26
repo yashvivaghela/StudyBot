@@ -28,7 +28,7 @@ MODELS = [
     "llama-3.1-8b-instant",
 ]
 
-async def generate_plan(topic_name: str, goal: str) -> dict:
+async def generate_plan(topic_name: str, goal: str,prior_context: str = "") -> dict:
     last_error = None
     for model_name in MODELS:
         try:
@@ -42,11 +42,18 @@ Your job is to create structured, realistic study plans based on the student's g
 You must ALWAYS respond with valid JSON only — no explanation, no markdown, no backticks.
 Just raw JSON.""")
 
+            context_block = f"""
+The student provided this about their existing knowledge and preferences:
+{prior_context}
+
+Use this to skip or significantly compress any weeks covering things they already know well, and to bias task selection toward any stated preferences (e.g. more practice problems, less theory, avoid a specific area).""" if prior_context.strip() else ""
+
             human_message = HumanMessage(content=f"""
 Create a study plan for the following:
 
 Topic: {topic_name}
 Goal: {goal}
+{context_block}
 
 Respond with this exact JSON structure:
 {{

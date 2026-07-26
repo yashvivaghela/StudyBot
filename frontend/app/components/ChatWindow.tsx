@@ -33,6 +33,16 @@ interface PlanChange {
   error?: string
 }
 
+interface PrereqInfo {
+  name: string
+  week_number: number | null
+}
+interface PrereqGap {
+  missing_prereqs: PrereqInfo[]
+  original_message: string,
+  question_topic: string 
+}
+
 export default function ChatWindow({ topicId, topicName, initialMessages, prefillMessage, onPrefillUsed ,onTaskUpdate}: Props) {
   const [messages, setMessages] = useState<Message[]>(initialMessages)
   const [input, setInput] = useState('')
@@ -41,6 +51,8 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
   const bottomRef = useRef<HTMLDivElement>(null)
   const [pendingPlanChange, setPendingPlanChange] = useState<PlanChange | null>(null)
   const [applyingPlanChange, setApplyingPlanChange] = useState(false)
+  const [pendingPrereqGap, setPendingPrereqGap] = useState<PrereqGap | null>(null)
+  const [taskOriginated, setTaskOriginated] = useState(false)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -49,6 +61,7 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
   useEffect(() => {
     if (prefillMessage) {
       setInput(prefillMessage)
+      setTaskOriginated(true) 
       onPrefillUsed?.()
     }
   }, [prefillMessage])
@@ -125,111 +138,149 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
   }
 }
 
-  async function sendMessage() {
-    if (!input.trim() || streaming) return
+async function sendMessage(overrideMessage?: string, opts?: { skipPrereqCheck?: boolean; skipIntentCheck?: boolean; onDone?: () => void }) {
+  const messageToSend = overrideMessage ?? input.trim()
+  if (!messageToSend || streaming) return
+  const skipIntentCheck = opts?.skipIntentCheck ?? (!overrideMessage && taskOriginated)
 
-    const userMessage = input.trim()
-    setInput('')
-    setPendingPlanChange(null)
 
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }])
-    setRetrieving(true)
-    
+  if (!overrideMessage) setInput('')
+  setPendingPlanChange(null)
+  setPendingPrereqGap(null)
 
-    try {
-      const res = await fetch(`${API}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic_id: topicId, message: userMessage })
+  setMessages(prev => [...prev, { role: 'user', content: messageToSend }])
+  setRetrieving(true)
+
+  try {
+    const res = await fetch(`${API}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic_id: topicId,
+        message: messageToSend,
+        skip_prereq_check: opts?.skipPrereqCheck ?? false,
+        skip_intent_check: skipIntentCheck
       })
+    })
 
-      setRetrieving(false)
-      setStreaming(true)
+    setRetrieving(false)
+    setStreaming(true)
+    setMessages(prev => [...prev, { role: 'assistant', content: '' }])
 
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }])
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let hasContent = false
 
-      const reader = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let hasContent = false
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = decoder.decode(value)
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        const chunk = decoder.decode(value)
-        if (chunk.includes('__PLAN_CHANGE__') && chunk.includes('__PLANEND__')) {
-    try {
-      const signalStart = chunk.indexOf('__PLAN_CHANGE__')
-      const signalEnd = chunk.indexOf('__PLANEND__') + '__PLANEND__'.length
-      const signal = chunk.slice(signalStart, signalEnd)
-      const jsonStr = signal.replace('__PLAN_CHANGE__', '').replace('__PLANEND__', '').trim()
-      const planData = JSON.parse(jsonStr)
-      setPendingPlanChange(planData)
-      
-      // Render anything after the signal
-      const remainder = chunk.slice(signalEnd)
-      if (remainder) {
-        hasContent = true
-        setMessages(prev => {
-          const updated = [...prev]
-          updated[updated.length - 1] = {
-            role: 'assistant',
-            content: updated[updated.length - 1].content + remainder
+      if (chunk.includes('__PREREQ_GAP__') && chunk.includes('__PREREQEND__')) {
+        try {
+          const signalStart = chunk.indexOf('__PREREQ_GAP__')
+          const signalEnd = chunk.indexOf('__PREREQEND__') + '__PREREQEND__'.length
+          const signal = chunk.slice(signalStart, signalEnd)
+          const jsonStr = signal.replace('__PREREQ_GAP__', '').replace('__PREREQEND__', '').trim()
+          setPendingPrereqGap(JSON.parse(jsonStr))
+
+          const remainder = chunk.slice(signalEnd)
+          if (remainder) {
+            hasContent = true
+            setMessages(prev => {
+              const updated = [...prev]
+              updated[updated.length - 1] = { role: 'assistant', content: updated[updated.length - 1].content + remainder }
+              return updated
+            })
           }
-          return updated
-        })
-      }
-      // invalidate cache is new message is there 
-      sessionStorage.removeItem(`brief_${topicId}`)
-      sessionStorage.removeItem(`brief_time_${topicId}`)
-    } catch (e) {
-      console.error('Failed to parse plan change signal', e)
-    }
-    continue
-  }
-
-        if (chunk) {
-          hasContent = true
-          setMessages(prev => {
-            const updated = [...prev]
-            updated[updated.length - 1] = {
-              role: 'assistant',
-              content: updated[updated.length - 1].content + chunk
-            }
-            return updated
-          })
+        } catch (e) {
+          console.error('Failed to parse prereq gap signal', e)
         }
+        continue
       }
 
-      // If nothing streamed back — API was likely rate limited
-      if (!hasContent) {
-        setMessages(prev => {
-          const updated = [...prev]
-          updated[updated.length - 1] = {
-            role: 'assistant',
-            content: '⚠️ The AI is currently overloaded. Please wait a minute and try again.'
-          }
-          return updated
-        })
-      }
+      if (chunk.includes('__PLAN_CHANGE__') && chunk.includes('__PLANEND__')) {
+        try {
+    const signalStart = chunk.indexOf('__PLAN_CHANGE__')
+    const signalEnd = chunk.indexOf('__PLANEND__') + '__PLANEND__'.length
+    const signal = chunk.slice(signalStart, signalEnd)
+    const jsonStr = signal.replace('__PLAN_CHANGE__', '').replace('__PLANEND__', '').trim()
+    const planData = JSON.parse(jsonStr)
+    setPendingPlanChange(planData)
 
-    } catch (e) {
-      console.error('Chat error', e)
-      setRetrieving(false)
+    const remainder = chunk.slice(signalEnd)
+    if (remainder) {
+      hasContent = true
       setMessages(prev => {
         const updated = [...prev]
-        const last = updated[updated.length - 1]
-        if (last?.role === 'assistant' && !last.content) {
-          updated[updated.length - 1] = {
-            role: 'assistant',
-            content: '⚠️ Something went wrong. Please try again in a moment.'
-          }
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          content: updated[updated.length - 1].content + remainder
         }
         return updated
       })
-    } finally {
-      setStreaming(false)
     }
+    sessionStorage.removeItem(`brief_${topicId}`)
+    sessionStorage.removeItem(`brief_time_${topicId}`)
+  } catch (e) {
+    console.error('Failed to parse plan change signal', e)
   }
+        continue
+      }
+
+      if (chunk) {
+        hasContent = true
+        setMessages(prev => {
+          const updated = [...prev]
+          updated[updated.length - 1] = { role: 'assistant', content: updated[updated.length - 1].content + chunk }
+          return updated
+        })
+      }
+    }
+
+    if (!hasContent) {
+      setMessages(prev => {
+        const updated = [...prev]
+        updated[updated.length - 1] = { role: 'assistant', content: '⚠️ The AI is currently overloaded. Please wait a minute and try again.' }
+        return updated
+      })
+    }
+
+    opts?.onDone?.()
+
+  } catch (e) {
+    console.error('Chat error', e)
+    setRetrieving(false)
+    setMessages(prev => {
+      const updated = [...prev]
+      const last = updated[updated.length - 1]
+      if (last?.role === 'assistant' && !last.content) {
+        updated[updated.length - 1] = { role: 'assistant', content: '⚠️ Something went wrong. Please try again in a moment.' }
+      }
+      return updated
+    })
+  } finally {
+    setStreaming(false)
+  }
+}
+
+function coverPrereqFirst() {
+  if (!pendingPrereqGap) return
+  const gap = pendingPrereqGap
+  const prereqNames = gap.missing_prereqs.map(p => p.name).join(', ')
+  setPendingPrereqGap(null)
+  sendMessage(
+    `Can you explain ${prereqNames} so that I understand ${gap.question_topic} better?`,
+    { skipPrereqCheck: true, skipIntentCheck: true,onDone: () => sendMessage(gap.original_message, { skipPrereqCheck: true,skipIntentCheck: true }) }
+  )
+}
+
+function skipPrereqAndContinue() {
+  if (!pendingPrereqGap) return
+  const originalMessage = pendingPrereqGap.original_message
+  setPendingPrereqGap(null)
+  sendMessage(originalMessage, { skipPrereqCheck: true,skipIntentCheck: true })
+}
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -414,6 +465,7 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
     </button>
   </div>
 )}
+
           <div className="flex gap-2">
            
             <button
@@ -435,6 +487,35 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
     </div>
   </div>
 )}
+{pendingPrereqGap && (
+  <div className="flex justify-start">
+    <div className="bg-zinc-900 border border-amber-800 rounded-2xl px-4 py-4 max-w-[80%]">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-5 h-5 rounded-full bg-amber-500/20 border border-amber-800 flex items-center justify-center text-xs">⚠</div>
+        <p className="text-amber-400 text-xs font-medium uppercase tracking-wide">Prerequisite Check</p>
+      </div>
+      <div className="flex flex-col gap-1 mb-4">
+        {pendingPrereqGap.missing_prereqs.map((p, i) => (
+          <p key={i} className="text-zinc-300 text-xs">
+            <span className="text-white font-medium">{p.name}</span>
+            {p.week_number != null ? ` — part of Week ${p.week_number}, not covered yet` : ' — not covered yet'}
+          </p>
+        ))}
+      </div>
+      <p className="text-zinc-500 text-xs mb-4">Want to cover this first?</p>
+      <div className="flex gap-2">
+        <button onClick={coverPrereqFirst} disabled={streaming}
+          className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-medium transition-colors">
+          Yes, cover it first
+        </button>
+        <button onClick={skipPrereqAndContinue} disabled={streaming}
+          className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs transition-colors">
+          No, continue
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
         <div ref={bottomRef} />
       </div>
@@ -445,7 +526,10 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
       <div className="border-t border-zinc-800 p-4 flex gap-3">
         <textarea
           value={input}
-          onChange={e => setInput(e.target.value)}
+          onChange={e => {
+    setInput(e.target.value)
+    if (taskOriginated) setTaskOriginated(false)
+  }}
           onKeyDown={handleKeyDown}
           placeholder={`Ask anything about ${topicName}...`}
           rows={1}
@@ -453,7 +537,7 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
           className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-white placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors resize-none text-sm disabled:opacity-50"
         />
         <button
-          onClick={sendMessage}
+          onClick={() => sendMessage()}
           disabled={streaming || !input.trim()}
           className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 rounded-xl transition-colors text-sm font-medium"
         >

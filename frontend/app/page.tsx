@@ -21,6 +21,7 @@ export default function Home() {
   const [name, setName] = useState('')
   const [goal, setGoal] = useState('')
   const [creating, setCreating] = useState(false)
+  const [priorContext, setPriorContext] = useState('')
 
   useEffect(() => { fetchTopics() }, [])
 
@@ -43,16 +44,22 @@ export default function Home() {
       const res = await fetch(`${API}/topics`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, goal })
+        body: JSON.stringify({ name, goal,prior_context: priorContext })
       })
       const topic = await res.json()
-      await fetch(`${API}/topics/${topic.id}/plan`, { method: 'POST' })
+      await fetch(`${API}/topics/${topic.id}/plan`, { method: 'POST'})
       router.push(`/topics/${topic.id}`)
     } catch (e) {
       console.error(e)
       setCreating(false)
     }
   }
+  async function handleDelete(e: React.MouseEvent, topicId: number) {
+  e.stopPropagation()   // don't trigger the card's onClick navigation
+  if (!confirm('Delete this topic? This cannot be undone.')) return
+  await fetch(`${API}/topics/${topicId}`, { method: 'DELETE' })
+  fetchTopics()
+}
 
   return (
     <main className="min-h-screen bg-[#080808]">
@@ -95,11 +102,18 @@ export default function Home() {
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {topics.map(topic => (
-                <div
-                  key={topic.id}
-                  onClick={() => router.push(`/topics/${topic.id}`)}
-                  className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 cursor-pointer group transition-all duration-200 hover:border-violet-500/50 hover:shadow-lg hover:shadow-violet-500/5"
-                >
+               <div
+  key={topic.id}
+  onClick={() => router.push(`/topics/${topic.id}`)}
+  className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 cursor-pointer group relative transition-all duration-200 hover:border-violet-500/50 hover:shadow-lg hover:shadow-violet-500/5"
+>
+                 <button
+  onClick={(e) => handleDelete(e, topic.id)}
+  className="absolute -top-2 -right-2 z-10 opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 hover:bg-red-950/50 transition-all p-1 rounded-full bg-zinc-800 border border-zinc-700 hover:border-red-800"
+  title="Delete topic"
+>
+  ✕
+</button>
                   <div className="flex items-start justify-between mb-3">
                     <h2 className="text-white font-medium group-hover:text-violet-400 transition-colors">
                       {topic.name}
@@ -158,6 +172,7 @@ export default function Home() {
               <label className="text-zinc-500 text-xs mb-2 block uppercase tracking-wide">
                 Your goal
               </label>
+              
               <textarea
                 value={goal}
                 onChange={e => setGoal(e.target.value)}
@@ -166,6 +181,18 @@ export default function Home() {
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors resize-none"
               />
             </div>
+            <div className="mb-6">
+  <label className="text-zinc-500 text-xs mb-2 block uppercase tracking-wide">
+    What you already know / preferences <span className="normal-case text-zinc-600">(optional)</span>
+  </label>
+  <textarea
+    value={priorContext}
+    onChange={e => setPriorContext(e.target.value)}
+    placeholder="e.g. Already comfortable with arrays and hashmaps. Prefer more practice problems over theory."
+    rows={3}
+    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors resize-none"
+  />
+</div>
 
             <div className="flex gap-3">
               <button

@@ -15,7 +15,9 @@ import json
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 from db import SessionLocal, init_db, Topic, Message, Plan, PlanWeek, PlanTask
-from vector_store import embed_and_store, retrieve_similar, init_vector_store
+from prereq import detect_prereq_gap, filter_unstudied_prereqs
+from vector_store import embed_and_store, retrieve_similar, init_vector_store,client, COLLECTION_NAME
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 from chain import stream_response
 from planner import generate_plan, save_plan
 from planner import generate_adjusted_plan
@@ -54,10 +56,13 @@ async def startup():
 class CreateTopicRequest(BaseModel):
     name: str
     goal: str
+    prior_context: str = ""
 
 class ChatRequest(BaseModel):
     topic_id: int
     message: str
+    skip_prereq_check: bool = False
+    skip_intent_check: bool = False
 
 class UpdateTaskRequest(BaseModel):
     status: str  # "todo" | "done" | "struggling"
@@ -66,6 +71,8 @@ class AdjustPlanRequest(BaseModel):
     reason: str
     cached_weeks: list = None 
     summary: str = None
+
+    
 
 
 # ---------- TOPIC ROUTES ----------
@@ -92,7 +99,7 @@ def get_topics():
 def create_topic(req: CreateTopicRequest):
     """Creates a new topic and returns it."""
     db = SessionLocal()
-    topic = Topic(name=req.name, goal=req.goal)
+    topic = Topic(name=req.name, goal=req.goal,prior_context=req.prior_context)
     db.add(topic)
     db.commit()
     db.refresh(topic)
@@ -113,10 +120,12 @@ async def create_plan(topic_id: int):
     if existing_plan:
         db.close()
         raise HTTPException(status_code=400, detail="Plan already exists for this topic")
+    print(f"DEBUG prior_context being sent to plan generation: '{topic.prior_context}'")
 
     plan_data = await generate_plan(
         topic_name=topic.name,
-        goal=topic.goal
+        goal=topic.goal,
+        prior_context=topic.prior_context
     )
 
     saved_plan = await save_plan(
@@ -183,6 +192,34 @@ def get_topic(topic_id: int):
     db.close()
     return result
 
+@app.delete("/topics/{topic_id}")
+def delete_topic(topic_id: int):
+    """Deletes a topic and all its associated data (messages, plan, weeks, tasks)."""
+    db = SessionLocal()
+    topic = db.query(Topic).filter(Topic.id == topic_id).first()
+    if not topic:
+        db.close()
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    # Delete plan hierarchy first (tasks → weeks → plan), then messages, then the topic
+    plan = db.query(Plan).filter(Plan.topic_id == topic_id).first()
+    if plan:
+        for week in plan.weeks:
+            for task in week.tasks:
+                db.delete(task)
+            db.delete(week)
+        db.delete(plan)
+
+    db.query(Message).filter(Message.topic_id == topic_id).delete()
+    db.delete(topic)
+    db.commit()
+    client.delete(
+        collection_name=COLLECTION_NAME,
+        points_selector=Filter(must=[FieldCondition(key="topic_id", match=MatchValue(value=topic_id))])
+    )
+    db.close()
+    return {"success": True}
+
 
 # ---------- CHAT ROUTE ----------
 @app.post("/chat")
@@ -201,22 +238,41 @@ async def chat(req: ChatRequest):
         {"role": m.role, "content": m.content}
         for m in reversed(recent)
     ]
-    # Detect plan change intent
-    plan_change = await detect_plan_change_intent(req.message)
-    print(f"DEBUG intent: {plan_change}")
     plan_change_detected = None
-
-    if plan_change.get("action") == "adjust_plan":
-        plan_change_detected = {
-            "reason": req.message
-        }
+    # Detect plan change intent
+    if not req.skip_intent_check:
+        plan_change = await detect_plan_change_intent(req.message)
+        print(f"DEBUG intent: {plan_change}")
     
+        if plan_change.get("action") == "adjust_plan":
+            plan_change_detected = {
+                "reason": req.message
+        }
+    plan = db.query(Plan).filter(Plan.topic_id == req.topic_id).first()
+
+    prereq_gap_detected = None
+    if not req.skip_prereq_check and not plan_change_detected:
+        gap_result = await detect_prereq_gap(
+            message=req.message,
+            topic_name=topic.name,
+            plan=plan
+        )
+        print(f"DEBUG prereq gap: {gap_result}")
+        if gap_result.get("has_gap") and gap_result.get("missing_prereqs"):
+            unstudied = filter_unstudied_prereqs(gap_result["missing_prereqs"], req.topic_id)
+            if unstudied:
+                prereq_gap_detected = {
+                    "missing_prereqs": unstudied,
+                    "original_message": req.message,
+                     "question_topic": gap_result.get("question_topic", topic.name) 
+                }
     # Retrieve semantically similar past messages from Qdrant
     retrieved_context = retrieve_similar(
         query=req.message,
         topic_id=req.topic_id,
         top_k=3
     )
+    print(f"DEBUG retrieved_context: {retrieved_context}")
 
     # Save user message to SQLite
     user_msg = Message(
@@ -242,12 +298,17 @@ async def chat(req: ChatRequest):
         if plan_change_detected:
             signal = f"__PLAN_CHANGE__{json.dumps(plan_change_detected)}__PLANEND__\n"
             yield signal
+        
+        if prereq_gap_detected:
+            signal = f"__PREREQ_GAP__{json.dumps(prereq_gap_detected)}__PREREQEND__\n"
+            yield signal
         async for token in stream_response(
             user_message=req.message,
             topic_name=topic.name,
             recent_messages=recent_messages,
             retrieved_context=retrieved_context,
-            plan_change_detected=plan_change_detected
+            plan_change_detected=plan_change_detected,
+            prereq_gap_detected=prereq_gap_detected
         ):
             full_response.append(token)
             yield token
