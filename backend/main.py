@@ -32,7 +32,8 @@ app = FastAPI()
     # ]
 
 MODELS = [
-    "llama-3.3-70b-versatile",  # smarter model for plan generation
+    # "llama-3.3-70b-versatile",   smarter model for plan generation
+    "openai/gpt-oss-120b",
     "llama-3.1-8b-instant",
 ]
 

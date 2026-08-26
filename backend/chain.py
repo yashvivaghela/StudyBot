@@ -27,7 +27,8 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 MODELS = [
     "llama-3.1-8b-instant",   # fastest, free
-    "llama-3.3-70b-versatile", # smarter, still free
+    # "llama-3.3-70b-versatile", # smarter, still free
+    "openai/gpt-oss-120b",
     "gemma2-9b-it",            # fallback
 ]
 

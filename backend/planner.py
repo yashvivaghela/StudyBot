@@ -24,7 +24,8 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 #     "models/gemini-2.0-flash",
 # ]
 MODELS = [
-    "llama-3.3-70b-versatile",  # smarter model for plan generation
+    # "llama-3.3-70b-versatile",  # smarter model for plan generation
+    "openai/gpt-oss-120b",
     "llama-3.1-8b-instant",
 ]
 

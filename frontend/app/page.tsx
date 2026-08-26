@@ -107,12 +107,14 @@ export default function Home() {
   onClick={() => router.push(`/topics/${topic.id}`)}
   className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 cursor-pointer group relative transition-all duration-200 hover:border-violet-500/50 hover:shadow-lg hover:shadow-violet-500/5"
 >
-                 <button
+                <button
   onClick={(e) => handleDelete(e, topic.id)}
-  className="absolute -top-2 -right-2 z-10 opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 hover:bg-red-950/50 transition-all p-1 rounded-full bg-zinc-800 border border-zinc-700 hover:border-red-800"
+  className="absolute -top-2 -right-2 z-10 w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-500 hover:bg-red-500 hover:border-red-500 hover:text-white transition-all duration-150"
   title="Delete topic"
 >
-  ✕
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+    <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
 </button>
                   <div className="flex items-start justify-between mb-3">
                     <h2 className="text-white font-medium group-hover:text-violet-400 transition-colors">
@@ -178,7 +180,7 @@ export default function Home() {
                 onChange={e => setGoal(e.target.value)}
                 placeholder="e.g. Prepare for SWE interviews in 4 weeks, focus on arrays and DP"
                 rows={4}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors resize-none"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors resize-y"
               />
             </div>
             <div className="mb-6">
@@ -190,7 +192,7 @@ export default function Home() {
     onChange={e => setPriorContext(e.target.value)}
     placeholder="e.g. Already comfortable with arrays and hashmaps. Prefer more practice problems over theory."
     rows={3}
-    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors resize-none"
+    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors resize-y"
   />
 </div>
 
