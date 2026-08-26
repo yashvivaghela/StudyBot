@@ -20,3 +20,31 @@ A full-stack AI study assistant that builds a personalized study plan, adapts it
 - **Collapsible plan dashboard** — checkboxes for task completion, per-week collapse, progress bar
 - **Topic deletion** — full cascade cleanup across SQLite (plan/weeks/tasks/messages) and Qdrant (embedded messages)
 - **Error handling** — graceful fallback messaging for LLM rate limits / overload
+
+## Setting up project
+ 
+```
+# Clone repo
+git clone https://github.com/yashvivaghela/StudyBot.git
+cd StudyBot
+ 
+# Backend setup
+cd backend
+python3 -m venv venv
+source venv/bin/activate        # venv\Scripts\activate on Windows
+pip install -r requirements.txt
+ 
+# Add your API keys to backend/.env
+echo "GROQ_API_KEY=your_key_here" >> .env
+echo "GEMINI_API_KEY=your_key_here" >> .env
+ 
+uvicorn main:app --reload --port 8000
+ 
+# Frontend setup (in new terminal)
+cd ../frontend
+npm install
+npm run dev
+```
+ 
+Backend runs at `http://localhost:8000`, frontend at `http://localhost:3000`.
+On first run, the backend creates `studybot.db` (SQLite) and a local `qdrant_storage/` folder automatically — no external database setup needed.
