@@ -34,7 +34,7 @@ app = FastAPI()
 MODELS = [
     # "llama-3.3-70b-versatile",   smarter model for plan generation
     "openai/gpt-oss-120b",
-    "llama-3.1-8b-instant",
+    # "llama-3.1-8b-instant",
 ]
 
 app.add_middleware(
@@ -256,10 +256,13 @@ async def chat(req: ChatRequest):
         gap_result = await detect_prereq_gap(
             message=req.message,
             topic_name=topic.name,
-            plan=plan
+            plan=plan,
+            prior_context=topic.prior_context or "",
+            recent_messages=recent_messages
+            
         )
         print(f"DEBUG prereq gap: {gap_result}")
-        if gap_result.get("has_gap") and gap_result.get("missing_prereqs"):
+        if gap_result.get("has_gap") and gap_result.get("missing_prereqs"): 
             unstudied = filter_unstudied_prereqs(gap_result["missing_prereqs"], req.topic_id)
             if unstudied:
                 prereq_gap_detected = {

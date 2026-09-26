@@ -26,11 +26,18 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 MODELS = [
     # "llama-3.3-70b-versatile",  # smarter model for plan generation
     "openai/gpt-oss-120b",
-    "llama-3.1-8b-instant",
+    # "llama-3.1-8b-instant",
 ]
 
 async def generate_plan(topic_name: str, goal: str,prior_context: str = "") -> dict:
     last_error = None
+    weeks_match = re.search(r'(\d+)\s*week', goal.lower())
+    if weeks_match:
+        time_constraint = f"EXACTLY {weeks_match.group(1)} weeks — this is a hard requirement stated by the student"
+    else:
+        time_constraint = "a realistic number of weeks for this goal"
+
+
     for model_name in MODELS:
         try:
             llm = ChatGroq(
@@ -55,6 +62,9 @@ Create a study plan for the following:
 Topic: {topic_name}
 Goal: {goal}
 {context_block}
+DURATION — NON-NEGOTIABLE: The plan must span {time_constraint}.
+You MUST generate exactly this many week objects in the "weeks" array — not more, not less. "duration_weeks" must equal this exact number.
+
 
 Respond with this exact JSON structure:
 {{
@@ -75,9 +85,21 @@ Respond with this exact JSON structure:
 
 Rules:
 - duration_weeks should match the number of weeks in the array
-- Each week should have 3-5 specific, actionable tasks
-- Tasks should be concrete not vague
+- Each week should have 3-5 tasks
+- Write tasks like a knowledgeable tutor would — not a checklist of resources, not a vague learning goal
+- Each task names ONE clear action (practice / implement / compare / analyze / apply / conjugate / compose / etc. — whatever fits the topic) plus the specific concept, technique, or skill it targets — nothing more
+- CRITICAL — do NOT invent a concrete example, scenario, or fictional context to make a task feel "specific," regardless of what the topic is. A task should read the same no matter what example eventually gets used to teach it. Specificity comes from precisely naming the concept or technique itself, not from attaching an invented instance of it. This applies to every kind of topic — technical, academic, creative, or physical — not just coding:
+  - e.g. for a database topic: "Practice filtering and sorting query results with WHERE and ORDER BY" — NOT "Write SELECT statements to retrieve columns from a customers table, filtering by signup date" (the customers table and signup date are an invented scenario)
+  - e.g. for a language topic: "Practice past-tense conjugation of common regular and irregular verbs" — NOT "Conjugate hablar, comer, and vivir in three sentences about a trip to Madrid" (the trip to Madrid is an invented scenario)
+  - The same pattern holds for any subject: name the skill/concept precisely; leave the worked example, dataset, sentence, or scenario to be generated later when the student actually engages with that task
+- Balance theory, practice, and application based on what the topic actually requires
+- Concepts-heavy topics (e.g. ML, math, history, theory-heavy subjects) need tasks that build understanding before jumping to application
+- Skills-heavy topics (e.g. coding, a language, an instrument, a sport) need tasks that emphasize doing over reading, still without inventing a scenario or example
+- Order concepts from foundational to advanced within each week and across weeks
+- Do not name specific external resources, tools, or exact problem/exercise numbers as the main task
+- Do not use vague tasks like "learn X" or "explore Y" — every task should imply a clear action, without needing an invented example to feel concrete
 - Return ONLY the JSON, nothing else
+
 """)
 
             response = await llm.ainvoke([system_message, human_message])
@@ -203,7 +225,8 @@ Generate a NEW set of remaining weeks that:
 - Strictly generates {time_constraint} — no more, no less
 - Accounts for what's already completed (don't repeat those)
 - Prioritizes the most critical topics given the limited time
-- Has 3-5 specific actionable tasks per week
+- Has 3-5 tasks per week, each naming one clear action plus the specific concept/technique/skill it targets
+- Does NOT invent a concrete example, scenario, or fictional context in any task, regardless of the topic — name the concept/technique precisely instead (e.g. "Practice window functions (ROW_NUMBER, RANK)" not "Rank employees by salary within department using window functions"; "Practice subjunctive mood in conditional sentences" not "Write three conditional sentences about what you'd do if you won the lottery"); the worked example belongs in chat later, not in the plan
 
 Respond with ONLY valid JSON, no markdown, no backticks:
 {{

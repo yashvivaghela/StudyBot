@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import SessionBrief from '@/app/components/SessionBrief'
+import remarkGfm from 'remark-gfm'
 
 const API = 'http://localhost:8000'
 
@@ -53,6 +54,7 @@ export default function ChatWindow({ topicId, topicName, initialMessages, prefil
   const [applyingPlanChange, setApplyingPlanChange] = useState(false)
   const [pendingPrereqGap, setPendingPrereqGap] = useState<PrereqGap | null>(null)
   const [taskOriginated, setTaskOriginated] = useState(false)
+  const [retrievingLabel, setRetrievingLabel] = useState('Thinking...')
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -149,6 +151,7 @@ async function sendMessage(overrideMessage?: string, opts?: { skipPrereqCheck?: 
   setPendingPrereqGap(null)
 
   setMessages(prev => [...prev, { role: 'user', content: messageToSend }])
+  setRetrievingLabel('Thinking...')
   setRetrieving(true)
 
   try {
@@ -271,7 +274,14 @@ function coverPrereqFirst() {
   setPendingPrereqGap(null)
   sendMessage(
     `Can you explain ${prereqNames} so that I understand ${gap.question_topic} better?`,
-    { skipPrereqCheck: true, skipIntentCheck: true,onDone: () => sendMessage(gap.original_message, { skipPrereqCheck: true,skipIntentCheck: true }) }
+    {
+      skipPrereqCheck: true,
+      skipIntentCheck: true,
+      onDone: () => {
+        setRetrievingLabel('Continuing with your original question...')
+        sendMessage(gap.original_message, { skipPrereqCheck: true, skipIntentCheck: true })
+      }
+    }
   )
 }
 
@@ -323,52 +333,75 @@ function skipPrereqAndContinue() {
                   : 'bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-bl-sm'
               }`}
             >
-              {msg.role === 'assistant' ? (
-                <div style={{ fontSize: '13px', lineHeight: '1.7', color: msg.content.startsWith('⚠️') ? '#facc15' : '#d4d4d8' }}>
-                  <ReactMarkdown
-                    components={{
-                      p: ({children}) => (
-                        <p style={{ marginBottom: '8px' }}>{children}</p>
-                      ),
-                      h1: ({children}) => (
-                        <h1 style={{ fontSize: '15px', fontWeight: '600', color: 'white', marginBottom: '6px', marginTop: '12px' }}>{children}</h1>
-                      ),
-                      h2: ({children}) => (
-                        <h2 style={{ fontSize: '14px', fontWeight: '600', color: 'white', marginBottom: '6px', marginTop: '12px' }}>{children}</h2>
-                      ),
-                      h3: ({children}) => (
-                        <h3 style={{ fontSize: '13px', fontWeight: '600', color: '#e4e4e7', marginBottom: '4px', marginTop: '8px' }}>{children}</h3>
-                      ),
-                      ul: ({children}) => (
-                        <ul style={{ paddingLeft: '16px', marginBottom: '8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>{children}</ul>
-                      ),
-                      ol: ({children}) => (
-                        <ol style={{ paddingLeft: '16px', marginBottom: '8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>{children}</ol>
-                      ),
-                      li: ({children}) => (
-                        <li style={{ lineHeight: '1.6', color: '#d4d4d8' }}>{children}</li>
-                      ),
-                      strong: ({children}) => (
-                        <strong style={{ fontWeight: '600', color: 'white' }}>{children}</strong>
-                      ),
-                      code: ({children, className}) => className ? (
-                        <pre style={{ background: '#0a0a0a', border: '1px solid #27272a', borderRadius: '8px', padding: '12px', fontSize: '12px', fontFamily: 'monospace', color: '#a78bfa', overflowX: 'auto', margin: '8px 0' }}>
-                          <code>{children}</code>
-                        </pre>
-                      ) : (
-                        <code style={{ background: '#1a1a1a', border: '1px solid #27272a', borderRadius: '4px', padding: '1px 5px', fontSize: '12px', fontFamily: 'monospace', color: '#a78bfa' }}>{children}</code>
-                      ),
-                      blockquote: ({children}) => (
-                        <blockquote style={{ borderLeft: '2px solid #7c3aed', paddingLeft: '12px', color: '#a1a1aa', fontStyle: 'italic', marginBottom: '8px' }}>{children}</blockquote>
-                      ),
-                      hr: () => (
-                        <hr style={{ border: 'none', borderTop: '1px solid #27272a', margin: '12px 0' }} />
-                      ),
-                    }}
-                  >
-                    {msg.content}
-                  </ReactMarkdown>
-                </div>
+               {msg.role === 'assistant' ? (
+                msg.content ? (
+                  <div style={{ fontSize: '13px', lineHeight: '1.7', color: msg.content.startsWith('⚠️') ? '#facc15' : '#d4d4d8' }}>
+                    <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                      components={{
+                        p: ({children}) => (
+                          <p style={{ marginBottom: '8px' }}>{children}</p>
+                        ),
+                        h1: ({children}) => (
+                          <h1 style={{ fontSize: '15px', fontWeight: '600', color: 'white', marginBottom: '6px', marginTop: '12px' }}>{children}</h1>
+                        ),
+                        h2: ({children}) => (
+                          <h2 style={{ fontSize: '14px', fontWeight: '600', color: 'white', marginBottom: '6px', marginTop: '12px' }}>{children}</h2>
+                        ),
+                        h3: ({children}) => (
+                          <h3 style={{ fontSize: '13px', fontWeight: '600', color: '#e4e4e7', marginBottom: '4px', marginTop: '8px' }}>{children}</h3>
+                        ),
+                        ul: ({children}) => (
+                          <ul style={{ paddingLeft: '16px', marginBottom: '8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>{children}</ul>
+                        ),
+                        ol: ({children}) => (
+                          <ol style={{ paddingLeft: '16px', marginBottom: '8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>{children}</ol>
+                        ),
+                        li: ({children}) => (
+                          <li style={{ lineHeight: '1.6', color: '#d4d4d8' }}>{children}</li>
+                        ),
+                        strong: ({children}) => (
+                          <strong style={{ fontWeight: '600', color: 'white' }}>{children}</strong>
+                        ),
+                        code: ({children, className}) => className ? (
+                          <pre style={{ background: '#0a0a0a', border: '1px solid #27272a', borderRadius: '8px', padding: '12px', fontSize: '12px', fontFamily: 'monospace', color: '#a78bfa', overflowX: 'auto', margin: '8px 0' }}>
+                            <code>{children}</code>
+                          </pre>
+                        ) : (
+                          <code style={{ background: '#1a1a1a', border: '1px solid #27272a', borderRadius: '4px', padding: '1px 5px', fontSize: '12px', fontFamily: 'monospace', color: '#a78bfa' }}>{children}</code>
+                        ),
+                        blockquote: ({children}) => (
+                          <blockquote style={{ borderLeft: '2px solid #7c3aed', paddingLeft: '12px', color: '#a1a1aa', fontStyle: 'italic', marginBottom: '8px' }}>{children}</blockquote>
+                        ),
+                         hr: () => (
+                          <hr style={{ border: 'none', borderTop: '1px solid #27272a', margin: '12px 0' }} />
+                        ),
+                        table: ({children}) => (
+                          <div style={{ overflowX: 'auto', margin: '8px 0' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>{children}</table>
+                          </div>
+                        ),
+                        thead: ({children}) => (
+                          <thead style={{ background: '#18181b' }}>{children}</thead>
+                        ),
+                        th: ({children}) => (
+                          <th style={{ border: '1px solid #27272a', padding: '6px 10px', textAlign: 'left', color: 'white', fontWeight: '600' }}>{children}</th>
+                        ),
+                        td: ({children}) => (
+                          <td style={{ border: '1px solid #27272a', padding: '6px 10px', color: '#d4d4d8' }}>{children}</td>
+                        ),
+                      }}
+                    >
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 py-1">
+                    <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                )
               ) : (
                 <p style={{ lineHeight: '1.6' }}>{msg.content}</p>
               )}
@@ -381,7 +414,7 @@ function skipPrereqAndContinue() {
           <div className="flex justify-start">
             <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-xs text-zinc-500 flex items-center gap-2">
               <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-pulse" />
-              searching your study history...
+              {retrievingLabel}
             </div>
           </div>
         )}

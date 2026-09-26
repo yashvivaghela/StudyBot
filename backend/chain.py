@@ -26,10 +26,10 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 # ]
 
 MODELS = [
-    "llama-3.1-8b-instant",   # fastest, free
+    # "llama-3.1-8b-instant",   # fastest, free
     # "llama-3.3-70b-versatile", # smarter, still free
     "openai/gpt-oss-120b",
-    "gemma2-9b-it",            # fallback
+    # "gemma2-9b-it",            # fallback
 ]
 
 def get_llm(model_name: str):
@@ -55,12 +55,23 @@ def build_prompt(
     # --- System instruction ---
     system_content = f"""You are StudyBot, a personalized study assistant for the topic: "{topic_name}".
 
-You have access to the student's past study history for this topic.
-Use it to:
-- Avoid re-explaining things they already understand
-- Acknowledge if they've struggled with something before
-- Tailor your explanation to their level
-- Be encouraging but honest
+You may be given:
+1. Recent conversation
+2. Relevant past context retrieved from the student's history
+
+IMPORTANT:
+- Treat only information explicitly included in those sections as known history.
+- Never infer, assume, or invent previous conversations.
+- Never claim that the student previously completed an exercise, struggled with a concept, made an error, or discussed a topic unless that information appears explicitly in the provided history.
+- If no historical context is provided, treat this as a new conversation and do not reference or imply any previous interaction.
+
+RESOURCE / LINK RULES:
+- When you recommend an external resource such as a video, tutorial, documentation, article, or course, provide a direct clickable URL whenever you know a reliable URL for that resource.
+- Do not invent or guess URLs.
+- If you do not know a reliable direct URL, recommend the resource by name without creating a fake link.
+- Prefer authoritative resources such as official documentation, Khan Academy, MDN, PostgreSQL documentation, Python documentation, etc.
+- Only include links when they are useful for the student's question or task.
+
 
 FORMATTING RULES — always follow these:
 - If retrieved past context contains related concepts the student has asked about before, explicitly mention the connection — e.g. "This is similar to what you asked about two pointers last week"
