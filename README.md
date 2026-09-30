@@ -3,7 +3,7 @@
 A full-stack AI study assistant that builds a personalized study plan, adapts it as you learn, and detects when you're missing the background knowledge needed to understand what you're asking about.
 
 🎥 **Watch the demo- 
-https://www.loom.com/share/2aedb1c2b71a433da62e401c092b8952**
+https://www.loom.com/share/768834cef5924e378e3a347d2a54bc46**
 
 ## Stack
  
